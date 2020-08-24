@@ -50,7 +50,7 @@ func (s Pkcs7Signer) Sign(r io.Reader) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return pdfsign.Sign(b), nil
+	return pdfsign.Sign(b)
 }
 
 type TsaSigner struct {
