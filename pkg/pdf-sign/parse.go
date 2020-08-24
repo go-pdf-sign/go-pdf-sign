@@ -37,17 +37,9 @@ func ExtractSignature(path string) (*pkcs7.PKCS7, pdf.Array, error) {
 	}
 
 	// Cast acroformobj (which is pdf.Object or an indirect reference) to pdf.Dict, so we can search for "Fields"
-	var acroformdict pdf.Dict
-	switch acroformobj.(type) {
-	case pdf.Dict:
-		acroformdict = acroformobj.(pdf.Dict)
-	case pdf.IndirectRef:
-		acroformdict, err = context.DereferenceDict(acroformobj)
-		if err != nil {
-			return nil, byteRangeArray, err
-		}
-	default:
-		return nil, byteRangeArray, errors.New("acroform dictionary invalid")
+	acroformdict, err := context.DereferenceDict(acroformobj)
+	if err != nil {
+		return nil, byteRangeArray, err
 	}
 
 	// Access Fields (array?)
