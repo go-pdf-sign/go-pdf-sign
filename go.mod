@@ -8,8 +8,9 @@ require (
 	github.com/cryptoballot/entropychecker v0.0.0-20180322051156-cdd1e353e376 // indirect
 	github.com/pdfcpu/pdfcpu v0.3.5-0.20200702233320-6074822658c1
 	github.com/phayes/cryptoid v0.0.0-20160503233126-981f0b34ea99 // indirect
+	github.com/philhug/go-trustlists v0.0.0-20200805131212-7a4658019824
 	go.mozilla.org/pkcs7 v0.0.0-20200128120323-432b2356ecb1
-	golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9 // indirect
+	golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9
 )
 
 replace github.com/pdfcpu/pdfcpu => github.com/go-pdf-sign/pdfcpu v0.3.7-0.20200824151223-ad7d4731d0a2
