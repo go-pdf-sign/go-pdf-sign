@@ -12,4 +12,4 @@ require (
 	golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9 // indirect
 )
 
-replace github.com/pdfcpu/pdfcpu => ../pdfcpu
+replace github.com/pdfcpu/pdfcpu => github.com/go-pdf-sign/pdfcpu v0.3.7-0.20200824151223-ad7d4731d0a2
