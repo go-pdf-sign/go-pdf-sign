@@ -1,4 +1,4 @@
-module github.com/philhug/go-pdf-sign
+module github.com/go-pdf-sign/go-pdf-sign
 
 go 1.13
 

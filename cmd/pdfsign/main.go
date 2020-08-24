@@ -18,7 +18,7 @@ import (
 
 	rfc3161 "github.com/clocklock/go-rfc3161"
 	PDFCPULog "github.com/pdfcpu/pdfcpu/pkg/log"
-	pdfsign "github.com/philhug/go-pdf-sign/pkg/pdf-sign"
+	pdfsign "github.com/go-pdf-sign/go-pdf-sign/pkg/pdf-sign"
 )
 
 func createAnnotation(xRefTable *pdf.XRefTable, value pdf.IndirectRef) (*pdf.IndirectRef, error) {
