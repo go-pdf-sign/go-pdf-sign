@@ -27,7 +27,12 @@ func ExtractTimestamp(signature *pkcs7.PKCS7, trustedAnchors *x509.CertPool) (ti
 
 	var signingTime time.Time
 
-	// TODO Only 1 signer
+	// Only 1 signer allowed (LATER: remove the loop below, since it does not make sense anymore)
+	if len(signature.Signers) != 1 {
+		return signingTime, nil, errors.New("there must be only one signer on the pkcs7")
+	}
+
+	// TODO What if the pkcs7 is a timestamp instead of a cms signature?
 
 	// The timestamp is included in the "SignerInfo" as an unauthenticated attribute
 	signers := signature.Signers
