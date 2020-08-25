@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	pdf_sign "github.com/go-pdf-sign/go-pdf-sign/pkg/pdf-sign"
+	"go.mozilla.org/pkcs7"
 )
 
 // Main function: extracts, parses and validates the CMS signature and the additional Validation Information
@@ -46,14 +48,34 @@ func main() {
 	}
 	trustedAnchors, err := pdf_sign.GetTrustedAnchors(trustedAnchorsPem)
 
-	signingTime, timestamp, err := pdf_sign.ExtractTimestamp(signature, trustedAnchors)
+	// TODO isTimestamp? if YES -> skip extractTimestamp
+	// Is the pdf only timestamped?
+	isTimestampOnly, err := pdf_sign.IsTimestampOnly(signature)
 	if err != nil {
-		log.Println(err)
-		log.Fatalln("ERROR: extract timestamp or timestamp verification failed")
-	} else {
-		log.Println("success: timestamp verification")
+		log.Fatalln(err)
 	}
-	// log.Println("(signed) signing time from timestamp: ", signingTime)
+
+	var signingTime time.Time
+	var timestamp *pkcs7.PKCS7
+	if !isTimestampOnly {
+
+		log.Println("cms signature: proceed with timestamp extraction and verification")
+		signingTime, timestamp, err = pdf_sign.ExtractAndVerifyTimestamp(signature, trustedAnchors)
+		if err != nil {
+			log.Println(err)
+			log.Fatalln("ERROR: extract timestamp or timestamp verification failed")
+		} else {
+			log.Println("success: timestamp verification")
+		}
+		// log.Println("(signed) signing time from timestamp: ", signingTime)
+
+	} else {
+		log.Println("timestamp only: skipping timestamp extraction and verification.")
+		signingTime, err = pdf_sign.ExtractSigningTime(signature)
+		if err != nil {
+			log.Fatalln(err)
+		}
+	}
 
 	// VALIDATE SIGNATURE
 	// I'm implementing my own verify()function. The ones included in pkcs7 package the expiration

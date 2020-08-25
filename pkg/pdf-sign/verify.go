@@ -23,72 +23,122 @@ type revocationInfoArchival struct {
 	OtherRevInfo []asn1.RawValue `asn1:"tag:2,optional"`
 }
 
-// ExtractTimestamp extracts the signingTime from the timestamp embedded in the signature
-func ExtractTimestamp(signature *pkcs7.PKCS7, trustedAnchors *x509.CertPool) (time.Time, *pkcs7.PKCS7, error) {
+// IsTimestampOnly returns true if the signature is a timestamp (instead of a CMS signature)
+func IsTimestampOnly(signature *pkcs7.PKCS7) (bool, error) {
+
+	signers := signature.Signers
+	if len(signers) != 1 {
+		return false, errors.New("only 1 signer allowed")
+	}
+	signer := signers[0]
+
+	// SigningTime should be 1.2.840.113549.1.9.5 and be part of the authenticated attributes
+	var OIDAttributeSigningTime = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 5}
+	for _, authattr := range signer.AuthenticatedAttributes {
+
+		// If found, we asume this is a timestamp
+		if authattr.Type.Equal(OIDAttributeSigningTime) {
+			return true, nil
+		}
+	}
+	// Signing time not found, so it's not a CAdES signature (so it can't be a timestamp)
+	return false, nil
+
+}
+
+// ExtractSigningTime extracts the signingTime from a timestamp
+func ExtractSigningTime(timestamp *pkcs7.PKCS7) (time.Time, error) {
 
 	var signingTime time.Time
 
-	// Only 1 signer allowed (LATER: remove the loop below, since it does not make sense anymore)
-	if len(signature.Signers) != 1 {
-		return signingTime, nil, errors.New("there must be only one signer on the pkcs7")
+	signers := timestamp.Signers
+	if len(signers) != 1 {
+		return signingTime, errors.New("the number of signers must be exactly 1")
 	}
 
-	// TODO What if the pkcs7 is a timestamp instead of a cms signature?
+	signer := signers[0]
 
-	// The timestamp is included in the "SignerInfo" as an unauthenticated attribute
-	signers := signature.Signers
-	for i := 0; i < len(signers); i++ {
-		signerInfo := signers[i]
+	// SigningTime is 1.2.840.113549.1.9.5
+	// It should be part of the authenticated attributes for a CAdES signature
+	var OIDAttributeSigningTime = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 5}
 
-		// The timestamp is an "unauthenticated attribute"
-		// The timestamp is a CADES signature of the "authenticated attributes"
-		unauthAttrs := signerInfo.UnauthenticatedAttributes
-		for _, unauthAttr := range unauthAttrs {
+	for _, authattr := range signer.AuthenticatedAttributes {
 
-			// LATER DEBUG info
-			//log.Printf("%d unauthenticated attribute type %s found in timestamp\n", i, unauthAttr.Type)
-
-			// Timestamp should be 1.2.840.113549.1.9.16.2.14 according to RFC3161 (Appendix A)
-			if unauthAttr.Type.String() == "1.2.840.113549.1.9.16.2.14" {
-
-				// The signingTime must be the one corresponding to the AuthAttribute of the timestamp
-				// The timestamp is a CADES signature
-				timestamp, err := pkcs7.Parse(unauthAttr.Value.Bytes)
-				if err != nil {
-					return signingTime, timestamp, err
-				}
-				log.Printf("timestamp extracted from pkcs7")
-
-				var OIDAttributeSigningTime = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 5}
-				var signingTimeBytes []byte
-
-				// Find signingTime
-				for _, signer := range timestamp.Signers {
-
-					// TODO only one signer allowed
-					for _, authattr := range signer.AuthenticatedAttributes {
-
-						if authattr.Type.Equal(OIDAttributeSigningTime) {
-							signingTimeBytes = authattr.Value.Bytes
-						}
-					}
-				}
-
-				asn1.Unmarshal(signingTimeBytes, &signingTime)
-				log.Println("signed signing time in timestamp:", signingTime)
-
-				// Verify timestamp signature
-				// TODO content? Where does timestamp.Content come from?
-				_, err = VerifyPkcs7(timestamp, signingTime, timestamp.Content, trustedAnchors)
-				if err != nil {
-					return signingTime, timestamp, err
-				}
-				log.Println("timestamp signature verified successfully")
-				return signingTime, timestamp, nil
-			}
+		if authattr.Type.Equal(OIDAttributeSigningTime) {
+			signingTimeBytes := authattr.Value.Bytes
+			asn1.Unmarshal(signingTimeBytes, &signingTime)
 		}
 	}
-	return signingTime, nil, errors.New("timestamp not found")
+
+	return signingTime, nil
+}
+
+// ExtractTimestamp extracts the timestamp from a signature
+func ExtractTimestamp(signature *pkcs7.PKCS7) (*pkcs7.PKCS7, error) {
+
+	var timestamp *pkcs7.PKCS7
+
+	signers := signature.Signers
+
+	// Only 1 signer allowed
+	if len(signers) != 1 {
+		return timestamp, errors.New("there must be only one signer on the pkcs7")
+	}
+
+	signerInfo := signers[0]
+
+	// The timestamp is included in the "SignerInfo" as an unauthenticated attribute
+	// The timestamp is a CADES signature of the "authenticated attributes"
+	unauthAttrs := signerInfo.UnauthenticatedAttributes
+	for _, unauthAttr := range unauthAttrs {
+
+		// LATER DEBUG info
+		//log.Printf("%d unauthenticated attribute type %s found in timestamp\n", i, unauthAttr.Type)
+
+		// Timestamp should be 1.2.840.113549.1.9.16.2.14 according to RFC3161 (Appendix A)
+		if unauthAttr.Type.String() == "1.2.840.113549.1.9.16.2.14" {
+
+			// The signingTime must be the one corresponding to the AuthAttribute of the timestamp
+			// The timestamp is a CADES signature
+			timestamp, err := pkcs7.Parse(unauthAttr.Value.Bytes)
+			if err != nil {
+				return timestamp, err
+			}
+			log.Printf("timestamp extracted from pkcs7")
+			return timestamp, nil
+		}
+	}
+	return timestamp, errors.New("no timestamp found in pkcs7")
+}
+
+// ExtractAndVerifyTimestamp extracts the timestamp and its signingTime and verifies the timestamp signature
+func ExtractAndVerifyTimestamp(signature *pkcs7.PKCS7, trustedAnchors *x509.CertPool) (time.Time, *pkcs7.PKCS7, error) {
+
+	var signingTime time.Time
+
+	// Extract timestamp from pkcs7
+	timestamp, err := ExtractTimestamp(signature)
+	if err != nil {
+		return signingTime, timestamp, err
+	}
+	log.Println("found timestamp in pkcs7")
+
+	// Extract signing time from timestamp
+	signingTime, err = ExtractSigningTime(timestamp)
+	if err != nil {
+		return signingTime, timestamp, err
+	}
+	log.Println("signed signing time in timestamp:", signingTime)
+
+	// Verify timestamp signature
+	// TODO content? Where does timestamp.Content come from?
+	_, err = VerifyPkcs7(timestamp, signingTime, timestamp.Content, trustedAnchors)
+	if err != nil {
+		return signingTime, timestamp, err
+	}
+	log.Println("timestamp verified successfully")
+	return signingTime, timestamp, nil
+
 }
 
 // VerifyPkcs7 is an own implementation based on pkcs7.verifyWithChain.
