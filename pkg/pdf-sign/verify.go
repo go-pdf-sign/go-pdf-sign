@@ -8,6 +8,7 @@ import (
 	"encoding/asn1"
 	"errors"
 	"io/ioutil"
+	"log"
 	"time"
 
 	"github.com/philhug/go-trustlists/pkg/trustlists"
@@ -44,8 +45,8 @@ func ExtractTimestamp(signature *pkcs7.PKCS7, trustedAnchors *x509.CertPool) (ti
 		unauthAttrs := signerInfo.UnauthenticatedAttributes
 		for _, unauthAttr := range unauthAttrs {
 
-			// LATER LOG unauthAttr
-			// fmt.Printf(" ***** LOG: %d unauthenticated attribute type %s found in timestamp\n", i, unauthAttr.Type)
+			// LATER DEBUG info
+			//log.Printf("%d unauthenticated attribute type %s found in timestamp\n", i, unauthAttr.Type)
 
 			// Timestamp should be 1.2.840.113549.1.9.16.2.14 according to RFC3161 (Appendix A)
 			if unauthAttr.Type.String() == "1.2.840.113549.1.9.16.2.14" {
@@ -56,6 +57,7 @@ func ExtractTimestamp(signature *pkcs7.PKCS7, trustedAnchors *x509.CertPool) (ti
 				if err != nil {
 					return signingTime, timestamp, err
 				}
+				log.Printf("timestamp extracted from pkcs7")
 
 				var OIDAttributeSigningTime = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 5}
 				var signingTimeBytes []byte
@@ -63,6 +65,7 @@ func ExtractTimestamp(signature *pkcs7.PKCS7, trustedAnchors *x509.CertPool) (ti
 				// Find signingTime
 				for _, signer := range timestamp.Signers {
 
+					// TODO only one signer allowed
 					for _, authattr := range signer.AuthenticatedAttributes {
 
 						if authattr.Type.Equal(OIDAttributeSigningTime) {
@@ -72,6 +75,7 @@ func ExtractTimestamp(signature *pkcs7.PKCS7, trustedAnchors *x509.CertPool) (ti
 				}
 
 				asn1.Unmarshal(signingTimeBytes, &signingTime)
+				log.Println("signed signing time in timestamp:", signingTime)
 
 				// Verify timestamp signature
 				// TODO content? Where does timestamp.Content come from?
@@ -79,7 +83,7 @@ func ExtractTimestamp(signature *pkcs7.PKCS7, trustedAnchors *x509.CertPool) (ti
 				if err != nil {
 					return signingTime, timestamp, err
 				}
-
+				log.Println("timestamp signature verified successfully")
 				return signingTime, timestamp, nil
 			}
 		}
@@ -110,6 +114,8 @@ func VerifyPkcs7(p7 *pkcs7.PKCS7, signingTime time.Time, content []byte, trusted
 
 		// SigningTime is 1.2.840.113549.1.9.5
 		// It should not part of the authenticated attributes for a PAdES signature
+		// LATER DEBUG
+		// log.Printf("%d authenticated attribute type %s found in signature\n", i, authAttr.Type)
 
 		// Is this attribute the MessageDigest?
 		var OIDAttributeMessageDigest = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 4}
@@ -120,6 +126,7 @@ func VerifyPkcs7(p7 *pkcs7.PKCS7, signingTime time.Time, content []byte, trusted
 			if err != nil {
 				return false, err
 			}
+			log.Printf("extracted digest from pkcs7")
 		}
 	} // end for auth attributes
 
@@ -136,12 +143,12 @@ func VerifyPkcs7(p7 *pkcs7.PKCS7, signingTime time.Time, content []byte, trusted
 	computed := h.Sum(make([]byte, 0))
 
 	if bytes.Compare(computed, digest) == 0 {
-		// fmt.Println(" ***** Computed == Digest")
+		log.Println("computed hash == digest on pkcs7")
 
 	} else {
-		// fmt.Println("Computed != Digest")
-		// fmt.Println("Expected: ", digest)
-		// fmt.Println("Computed: ", computed)
+		log.Println("ERROR: Computed != Digest")
+		log.Println("Expected: ", digest)
+		log.Println("Computed: ", computed)
 		return false, errors.New("computed digest does not match expected digest")
 	}
 
@@ -152,15 +159,7 @@ func VerifyPkcs7(p7 *pkcs7.PKCS7, signingTime time.Time, content []byte, trusted
 	if signingTime.Before(signerCertificate.NotBefore) || signingTime.After(signerCertificate.NotAfter) {
 		return false, errors.New("signer certificate was not valid as for the timestamped signing time")
 	}
-
-	// Trusted Anchors (usually the Root CA certificates)
-	// LATER I don't like how I'm handling the parameters here
-	/*
-		trustedAnchors, err := getTrustedAnchors(&trustedAnchorsPem)
-		if err != nil {
-			return false, err
-		}
-	*/
+	log.Println("the signing certificate was valid as for the timestamped signing time")
 
 	// Get intermediates from the signature. Only the roots are passed as a parameter.
 	intermediates, err := getIntermediates(p7)
@@ -181,6 +180,7 @@ func VerifyPkcs7(p7 *pkcs7.PKCS7, signingTime time.Time, content []byte, trusted
 	if err != nil {
 		return false, err
 	}
+	log.Printf("signer certificate verification was succesfull")
 
 	// Signature verification
 	// TODO Review checkSignature() in pkcs7.verify(). Is everything covered here?
@@ -204,8 +204,8 @@ func ExtractRevocationInfo(signature *pkcs7.PKCS7) (*ocsp.Response, *pkix.Certif
 
 		for _, authAttr := range authAttrs {
 
-			// LATER LOG authAttr
-			// fmt.Printf(" ***** LOG: authenticated attribute type %s found in signature\n", authAttr.Type)
+			// LATER DEBUG
+			// log.Printf("authenticated attribute type %s found in signature\n", authAttr.Type)
 
 			if authAttr.Type.String() == "1.2.840.113583.1.1.8" {
 
@@ -224,12 +224,19 @@ func ExtractRevocationInfo(signature *pkcs7.PKCS7) (*ocsp.Response, *pkix.Certif
 					return ocspResponse, crl, errors.New("ocsp array is empty on revocationInfoArchival attribute")
 				}
 				ocspResponse, err = ocsp.ParseResponse(ri.OCSP[0].Bytes, nil)
+				log.Printf("ocsp response extracted from pkcs7")
 				if err != nil {
 					return ocspResponse, crl, err
 				}
 
+				// TODO actually one of OCSP or CRL might be empty and that would be ok
+
 				// CRL
+				if len(ri.CRL) == 0 {
+					return ocspResponse, crl, errors.New("crl array is empty on revocationInfoArchival attribute")
+				}
 				crl, err := x509.ParseCRL(ri.CRL[0].Bytes)
+				log.Printf("crl extracted from pkcs7")
 				if err != nil {
 					return ocspResponse, crl, err
 				}
@@ -253,6 +260,7 @@ func VerifyOcsp(ocspresponse *ocsp.Response) (bool, error) {
 	}
 
 	// Status == ocsp.Good
+	log.Printf("ocsp response status is good")
 	return true, nil
 }
 
@@ -270,17 +278,17 @@ func VerifyCrl(crl *pkix.CertificateList, signature *pkcs7.PKCS7) (bool, error) 
 	list := crl.TBSCertList
 	revokedlist := list.RevokedCertificates
 	if len(revokedlist) == 0 {
-		//fmt.Println(" ***** LOG list is empty (LTV): no revoked certificates")
+		log.Println("list of revoked certificates is empty")
 
 	} else {
 		for _, revoked := range revokedlist {
-			// fmt.Println(" ***** LOG serial number of revoked certificate: ", revoked.SerialNumber)
+			log.Println("serial number of revoked certificate: ", revoked.SerialNumber)
 			if serialNumber != nil {
 				// Proof that the given serial number does not match the one on the list
 				if serialNumber == revoked.SerialNumber {
 					return false, errors.New("signing certificate is revoked according with the CRL")
 				} else {
-					// fmt.Println(" **** LOG serial number of revoked certificate does not match the one provided")
+					log.Println("serial number of revoked certificate does not match the signer certificate")
 				}
 			}
 		}
@@ -318,7 +326,7 @@ func getIntermediates(p7 *pkcs7.PKCS7) (*x509.CertPool, error) {
 	// Add all certificates
 	for _, cert := range p7.Certificates {
 		intermediates.AddCert(cert)
-		// fmt.Println(" ***** Added intermediate ", cert.Subject)
+		// log.Println(" ***** Added intermediate ", cert.Subject)
 	}
 	return intermediates, nil
 }
@@ -341,7 +349,7 @@ func GetTrustedAnchors(pem *string) (*x509.CertPool, error) {
 			return trustedAnchors, errors.New("error parsing cert pool from pem file")
 		}
 
-		// fmt.Println("***** Trusted anchors ", trustedAnchors)
+		// log.Println("***** Trusted anchors ", trustedAnchors)
 
 	} else {
 
