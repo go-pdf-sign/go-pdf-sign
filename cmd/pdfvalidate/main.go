@@ -22,7 +22,7 @@ func main() {
 	}
 
 	// Extract CMS signature from the PDF
-	signature, byteRangeArray, err := pdf_sign.ExtractSignature(os.Args[1])
+	signature, byteRangeArray, err := pdf_sign.ExtractSignatureFromPath(os.Args[1])
 	if err != nil {
 		log.Println(err)
 		log.Fatalln("ERROR: extracting signature failed")

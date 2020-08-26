@@ -4,6 +4,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
+	"log"
 	"os"
 
 	pdfcpu "github.com/pdfcpu/pdfcpu/pkg/api"
@@ -12,22 +13,41 @@ import (
 	"golang.org/x/crypto/ocsp"
 )
 
-// ExtractSignature accesses the RootDictionary of the PDF and extract:
+// ExtractContext extracts the PDF context from the PDF found on the given path
+func ExtractContext(path string) (*pdf.Context, error) {
+
+	context, err := pdfcpu.ReadContextFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return context, nil
+}
+
+// ExtractSignatureFromPath accesses the PDF on the given path and extracts:
 // - The CMS signature (as a pkcs7 object)
 // - The Byte Range (portion of the document included in the signature)
-func ExtractSignature(path string) (*pkcs7.PKCS7, pdf.Array, error) {
+func ExtractSignatureFromPath(path string) (*pkcs7.PKCS7, pdf.Array, error) {
 
 	var byteRangeArray pdf.Array
 
-	// TODO falls signature in memory wäre, hätte man kein File
-	// PDF File reader
-	context, err := pdfcpu.ReadContextFile(path)
+	context, err := ExtractContext(path)
 	if err != nil {
 		return nil, byteRangeArray, err
 	}
 
+	return ExtractSignature(context)
+}
+
+// ExtractSignature accesses the RootDictionary of the PDF and extracts:
+// - The CMS signature (as a pkcs7 object)
+// - The Byte Range (portion of the document included in the signature)
+func ExtractSignature(context *pdf.Context) (*pkcs7.PKCS7, pdf.Array, error) {
+
+	var byteRangeArray pdf.Array
+
 	// Access Root Dictionary (pdf.Dict)
 	rootdict := context.RootDict
+	log.Println("found root dictionary")
 
 	// Access AcroForm Dictionary (pdf.Object)
 	acroformobj, found := rootdict.Find("AcroForm")
@@ -35,6 +55,7 @@ func ExtractSignature(path string) (*pkcs7.PKCS7, pdf.Array, error) {
 	if !found {
 		return nil, byteRangeArray, errors.New("acroform dictionary not found")
 	}
+	log.Println("acroform dictionary found")
 
 	// Cast acroformobj (which is pdf.Object or an indirect reference) to pdf.Dict, so we can search for "Fields"
 	acroformdict, err := context.DereferenceDict(acroformobj)
@@ -48,6 +69,7 @@ func ExtractSignature(path string) (*pkcs7.PKCS7, pdf.Array, error) {
 	if !found {
 		return nil, byteRangeArray, errors.New("fields not found in acroform dictionary")
 	}
+	log.Println("fields found in acroform dictionary")
 
 	// Resolve Fields reference
 	fieldsarray, err := context.DereferenceArray(fields)
@@ -202,6 +224,8 @@ func ExtractValidationInformation(path string) ([]*ocsp.Response, []*pkix.Certif
 		// fmt.Println(hex.EncodeToString(ocspstream))
 		// Parse OCSP response
 		ocspresponse, err := ocsp.ParseResponse(ocspbyte, nil)
+		// TODO the ocsp library uses "signatureAlgorithmDetails" which is actually a copy from x509
+		// However, the PSS algorithm is missing for ocsp (it's included for x509 though)
 		if err != nil {
 			return nil, nil, err
 		}

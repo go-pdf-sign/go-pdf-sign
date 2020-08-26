@@ -104,7 +104,6 @@ func ExtractTimestamp(signature *pkcs7.PKCS7) (*pkcs7.PKCS7, error) {
 			if err != nil {
 				return timestamp, err
 			}
-			log.Printf("timestamp extracted from pkcs7")
 			return timestamp, nil
 		}
 	}
@@ -121,7 +120,7 @@ func ExtractAndVerifyTimestamp(signature *pkcs7.PKCS7, trustedAnchors *x509.Cert
 	if err != nil {
 		return signingTime, timestamp, err
 	}
-	log.Println("found timestamp in pkcs7")
+	log.Printf("timestamp extracted from pkcs7")
 
 	// Extract signing time from timestamp
 	signingTime, err = ExtractSigningTime(timestamp)
