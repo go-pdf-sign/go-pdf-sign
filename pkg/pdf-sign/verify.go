@@ -136,6 +136,7 @@ func ExtractAndVerifyTimestamp(signature *pkcs7.PKCS7, trustedAnchors *x509.Cert
 		return signingTime, timestamp, err
 	}
 	log.Println("timestamp verified successfully")
+	log.Println("timestamp signature algorithm: ", timestamp.GetOnlySigner().SignatureAlgorithm)
 	return signingTime, timestamp, nil
 
 }
@@ -184,9 +185,19 @@ func VerifyPkcs7(p7 *pkcs7.PKCS7, signingTime time.Time, content []byte, trusted
 		return false, errors.New("message digest not found among authenticated attributes")
 	}
 
+	// Find out the digest algorithm
+	// hash := crypto.SHA256
+	hashp, err := getDigestAlgorithmFromOid(signerInfo.DigestAlgorithm.Algorithm)
+	if err != nil {
+		return false, err
+	}
+
+	// TODO Do I need this?
+	hash := *hashp
+	// log.Println(" ***** digest algorithm: ", hash)
+
+	// TODO For some reason, for "timestamp only" this is not working
 	// Calculate message hash
-	// TODO Assuming signerInfo.digestAlgorithm is SHA256. I need to fix this.
-	hash := crypto.SHA256
 	h := hash.New()
 	h.Write(content)
 	computed := h.Sum(make([]byte, 0))
@@ -269,25 +280,21 @@ func ExtractRevocationInfo(signature *pkcs7.PKCS7) (*ocsp.Response, *pkix.Certif
 					return ocspResponse, crl, err
 				}
 
-				if len(ri.OCSP) == 0 {
-					return ocspResponse, crl, errors.New("ocsp array is empty on revocationInfoArchival attribute")
-				}
 				ocspResponse, err = ocsp.ParseResponse(ri.OCSP[0].Bytes, nil)
 				log.Printf("ocsp response extracted from pkcs7")
 				if err != nil {
 					return ocspResponse, crl, err
 				}
 
-				// TODO actually one of OCSP or CRL might be empty and that would be ok
-
-				// CRL
-				if len(ri.CRL) == 0 {
-					return ocspResponse, crl, errors.New("crl array is empty on revocationInfoArchival attribute")
-				}
 				crl, err := x509.ParseCRL(ri.CRL[0].Bytes)
 				log.Printf("crl extracted from pkcs7")
 				if err != nil {
 					return ocspResponse, crl, err
+				}
+
+				// Either the CRL or the OCSP might be empty, but not both of them
+				if len(ri.OCSP) == 0 && len(ri.CRL) == 0 {
+					return ocspResponse, crl, errors.New("both ocsp array and crl array are empty on revocationInfoArchival attribute")
 				}
 
 				return ocspResponse, crl, nil
@@ -353,7 +360,6 @@ func getCertificate(certpath string) (*x509.Certificate, error) {
 	var cert *x509.Certificate
 
 	// Read bytes from Root CA certificate file
-	// TODO PSS algorithm seems not to be supported
 	rootCaCertBytes, err := ioutil.ReadFile(certpath)
 	if err != nil {
 		return cert, err
@@ -410,4 +416,28 @@ func GetTrustedAnchors(pem *string) (*x509.CertPool, error) {
 
 	}
 	return trustedAnchors, nil
+}
+
+// Local functions
+
+// From crypto/ocsp
+var hashOIDs = map[crypto.Hash]asn1.ObjectIdentifier{
+	crypto.SHA1:   asn1.ObjectIdentifier([]int{1, 3, 14, 3, 2, 26}),
+	crypto.SHA256: asn1.ObjectIdentifier([]int{2, 16, 840, 1, 101, 3, 4, 2, 1}),
+	crypto.SHA384: asn1.ObjectIdentifier([]int{2, 16, 840, 1, 101, 3, 4, 2, 2}),
+	crypto.SHA512: asn1.ObjectIdentifier([]int{2, 16, 840, 1, 101, 3, 4, 2, 3}),
+}
+
+// getDigestAlgorithmFromOid
+func getDigestAlgorithmFromOid(oid asn1.ObjectIdentifier) (*crypto.Hash, error) {
+
+	for alg, algOid := range hashOIDs {
+		if algOid.Equal(oid) {
+			// LATER DEBUG
+			// log.Println(" ****** found digest algorithm for oid: ", oid)
+			return &alg, nil
+		}
+	}
+	// not found
+	return nil, errors.New("digest algorithm oid unknown")
 }

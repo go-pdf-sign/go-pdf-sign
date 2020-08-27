@@ -21,7 +21,7 @@ func main() {
 		fmt.Printf("Usage: xxx <test.pdf> [<cacerts.pem>]")
 	}
 
-	// Extract CMS signature from the PDF
+	// Extract pkcs7 object from pdf
 	signature, byteRangeArray, err := pdf_sign.ExtractSignatureFromPath(os.Args[1])
 	if err != nil {
 		log.Println(err)
@@ -29,13 +29,6 @@ func main() {
 	} else {
 		log.Println("signature found in PDF")
 		log.Println("byterange: ", byteRangeArray)
-	}
-
-	// Calculate digest of the document
-	content, err := pdf_sign.Contents(os.Args[1], byteRangeArray)
-	if err != nil {
-		log.Println(err)
-		log.Fatalln("ERROR: can't calculate content digest")
 	}
 
 	// EXTRACT and VALIDATE TIMESTAMP
@@ -48,7 +41,6 @@ func main() {
 	}
 	trustedAnchors, err := pdf_sign.GetTrustedAnchors(trustedAnchorsPem)
 
-	// TODO isTimestamp? if YES -> skip extractTimestamp
 	// Is the pdf only timestamped?
 	isTimestampOnly, err := pdf_sign.IsTimestampOnly(signature)
 	if err != nil {
@@ -57,6 +49,8 @@ func main() {
 
 	var signingTime time.Time
 	var timestamp *pkcs7.PKCS7
+
+	// Is the document only timestamped? If yes, skip the timestamp verification
 	if !isTimestampOnly {
 
 		log.Println("cms signature: proceed with timestamp extraction and verification")
@@ -75,6 +69,13 @@ func main() {
 		if err != nil {
 			log.Fatalln(err)
 		}
+	}
+
+	// Calculate digest of the document
+	content, err := pdf_sign.Contents(os.Args[1], byteRangeArray)
+	if err != nil {
+		log.Println(err)
+		log.Fatalln("ERROR: can't calculate content digest")
 	}
 
 	// VALIDATE SIGNATURE
