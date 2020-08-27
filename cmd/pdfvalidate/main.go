@@ -90,6 +90,8 @@ func main() {
 		log.Println("success: signature verification")
 	}
 
+	log.Println("sign algorithm: ", signature.GetOnlySigner().SignatureAlgorithm)
+
 	// 3 REVOCATION CHECKS
 	// The RI (revocation information = CRLs, OCSP) of the signature are embedded in the CMS object itself
 	// Adobe Reader: "The selected certificate is considered valid because it has not been revoked
