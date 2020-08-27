@@ -7,10 +7,11 @@ import (
 	"log"
 	"os"
 
+	"golang.org/x/crypto/ocsp"
+
 	pdfcpu "github.com/pdfcpu/pdfcpu/pkg/api"
 	pdf "github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
 	"go.mozilla.org/pkcs7"
-	"golang.org/x/crypto/ocsp"
 )
 
 // ExtractContext extracts the PDF context from the PDF found on the given path
