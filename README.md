@@ -83,7 +83,7 @@ trailer
 >>
 ```
 
-The __Document Catalog__ is the root of the objects in the PDF document and it's specified by the __/Root__ elment in the __Trailer__ section. We see the Root Dictionary is the object number 18. There is additional information in object number 7.
+The __Document Catalog__ is the root of the objects in the PDF document and it's specified by the __/Root__ element in the __Trailer__ section. We see the Root Dictionary is the object number 18. There is additional information in object number 7.
 
 The Root element is an indirect object. Objects in a PDF can be __indirect__. An indirect object is a numbered object represented with keywords __obj__ and __endobj__. The 18 is the Object ID and the 0 is the generation number. The letter R indicates that this is a reference to another object.
 
@@ -240,10 +240,6 @@ x<9c>­...
 endstream
 endobj
 ```
-
-The stream data is encoded (...)
-
-TODO
 
 Object 22 is an array containing a single element, which is a reference to object 19, and which according to its name should point to the CRL:
 ```
