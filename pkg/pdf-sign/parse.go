@@ -293,14 +293,18 @@ func ExtractRevocationInfo(signature *pkcs7.PKCS7) (*ocsp.Response, *pkix.Certif
 					return ocspResponse, crl, err
 				}
 
-				ocspResponse, err = ocsp.ParseResponse(ri.OCSP[0].Bytes, nil)
-				if err != nil {
-					return ocspResponse, crl, err
+				if len(ri.OCSP) > 0 {
+					ocspResponse, err = ocsp.ParseResponse(ri.OCSP[0].Bytes, nil)
+					if err != nil {
+						return ocspResponse, crl, err
+					}
 				}
 
-				crl, err := x509.ParseCRL(ri.CRL[0].Bytes)
-				if err != nil {
-					return ocspResponse, crl, err
+				if len(ri.CRL) > 0 {
+					crl, err := x509.ParseCRL(ri.CRL[0].Bytes)
+					if err != nil {
+						return ocspResponse, crl, err
+					}
 				}
 
 				// Either the CRL or the OCSP might be empty, but not both of them

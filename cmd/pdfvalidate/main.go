@@ -9,8 +9,9 @@ import (
 )
 
 // Main function: extracts, parses and validates the CMS signature and the additional Validation Information
-// Arguments: 1. The filepath to the PDF document
-// 2. The filepath to the certificate file of the timestamp service
+// Arguments:
+// 1. The filepath to the PDF document
+// 2. The filepath to a pem certificate file with the trusted anchors (optional)
 func main() {
 
 	if len(os.Args) < 2 {
