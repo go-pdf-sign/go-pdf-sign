@@ -6,6 +6,8 @@ github.com/cryptoballot/entropychecker v0.0.0-20180322051156-cdd1e353e376 h1:7Dd
 github.com/cryptoballot/entropychecker v0.0.0-20180322051156-cdd1e353e376/go.mod h1:HRz3dhLDOdF4kli4XbajIxsetcndH2bnTmMczuNWGQ0=
 github.com/go-pdf-sign/crypto v0.0.0-20200826114851-91613b36c631 h1:TwWksQA1247uAvfzhxvBaNHNxjZvQR2a6c6mZzvfzCo=
 github.com/go-pdf-sign/crypto v0.0.0-20200826114851-91613b36c631/go.mod h1:LzIPMQfyMNhhGPhUkYOs5KpL4U8rLKemX1yGLhDgUto=
+github.com/go-pdf-sign/crypto v0.0.0-20200903092350-977f9f696b45 h1:AVEx68VL7qeX6r2BtUhmK1I7XFMsNHdlQOVLsmqY9Pk=
+github.com/go-pdf-sign/crypto v0.0.0-20200903092350-977f9f696b45/go.mod h1:LzIPMQfyMNhhGPhUkYOs5KpL4U8rLKemX1yGLhDgUto=
 github.com/go-pdf-sign/pdfcpu v0.3.7-0.20200824151223-ad7d4731d0a2 h1:t3TY8DBrICOtKySEbtJQ0pSLCYPQ5K4TOZCn7cIPlj4=
 github.com/go-pdf-sign/pdfcpu v0.3.7-0.20200824151223-ad7d4731d0a2/go.mod h1:3wwz3xi60q88WM0kKZeOJvdQ4YgW4Og7whEiodseWs8=
 github.com/hhrutter/lzw v0.0.0-20190827003112-58b82c5a41cc/go.mod h1:yJBvOcu1wLQ9q9XZmfiPfur+3dQJuIhYQsMGLYcItZk=

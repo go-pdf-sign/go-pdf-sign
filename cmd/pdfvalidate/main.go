@@ -4,10 +4,8 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"time"
 
 	pdf_sign "github.com/go-pdf-sign/go-pdf-sign/pkg/pdf-sign"
-	"go.mozilla.org/pkcs7"
 )
 
 // Main function: extracts, parses and validates the CMS signature and the additional Validation Information
@@ -15,170 +13,97 @@ import (
 // 2. The filepath to the certificate file of the timestamp service
 func main() {
 
-	// Cacerts arg is optional
 	if len(os.Args) < 2 {
 		fmt.Printf("Arguments: %d/n", len(os.Args))
 		fmt.Printf("Usage: xxx <test.pdf> [<cacerts.pem>]")
 	}
 
-	// Extract pkcs7 object from pdf
-	signature, byteRangeArray, err := pdf_sign.ExtractSignatureFromPath(os.Args[1])
+	// Cacerts arg is optional
+	var trustanchorspem string
+	if len(os.Args) == 3 {
+		trustanchorspem = os.Args[2]
+	}
+
+	/*
+		// Uncomment to output the logs to a file instead of the standard output
+		logfile, err := os.OpenFile("signedpdf.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
+		if err != nil {
+			log.Println("can't create logfile: logging to stdout")
+		} else {
+			log.SetOutput(logfile)
+		}
+	*/
+
+	// Parse all verification relevant elements from the signed pdf file
+	mypdf, err := pdf_sign.Init(os.Args[1], trustanchorspem)
 	if err != nil {
 		log.Println(err)
-		log.Fatalln("ERROR: extracting signature failed")
-	} else {
-		log.Println("signature found in PDF")
-		log.Println("byterange: ", byteRangeArray)
+		log.Fatalln("ERROR: parse signed pdf failed")
 	}
+	log.Println("SUCCESS: INIT PDF")
 
-	// EXTRACT and VALIDATE TIMESTAMP
-	// The timestamp is included in the "SignerInfo" as an unauthenticated attribute
-	// TODO Use flags library instead
-	// If the trustedAnchors are provided as parameter, use them. Otherwise the function will return the EU list.
-	var trustedAnchorsPem *string
-	if len(os.Args) > 2 {
-		trustedAnchorsPem = &os.Args[2]
-	}
-	trustedAnchors, err := pdf_sign.GetTrustedAnchors(trustedAnchorsPem)
+	// Set log output back to console
+	// log.SetOutput(os.Stderr)
 
-	// Is the pdf only timestamped?
-	isTimestampOnly, err := pdf_sign.IsTimestampOnly(signature)
+	// 1. VALIDATE TIMESTAMP
+	_, err = pdf_sign.VerifyPkcs7(mypdf.Timestamp, mypdf.SigningTime, mypdf.Timestamp.Content, mypdf.TrustedAnchors)
 	if err != nil {
-		log.Fatalln(err)
+		log.Println(err)
+		log.Fatalln("ERROR: timestamp verification failed")
+	} else {
+		log.Println("SUCCESS: TIMESTAMP VERIFICATION")
 	}
 
-	var signingTime time.Time
-	var timestamp *pkcs7.PKCS7
+	// 2. VALIDATE SIGNATURE
+	if !mypdf.IsTimestampOnly {
+		_, err = pdf_sign.VerifyPkcs7(mypdf.Signature, mypdf.SigningTime, mypdf.Content, mypdf.TrustedAnchors)
 
-	// Is the document only timestamped? If yes, skip the timestamp verification
-	if !isTimestampOnly {
-
-		log.Println("cms signature: proceed with timestamp extraction and verification")
-		signingTime, timestamp, err = pdf_sign.ExtractAndVerifyTimestamp(signature, trustedAnchors)
 		if err != nil {
 			log.Println(err)
-			log.Fatalln("ERROR: extract timestamp or timestamp verification failed")
+			log.Fatalln("ERROR: signature verification failed")
+
 		} else {
-			log.Println("success: timestamp verification")
-		}
-		// log.Println("(signed) signing time from timestamp: ", signingTime)
-
-	} else {
-		log.Println("timestamp only: skipping timestamp extraction and verification.")
-		signingTime, err = pdf_sign.ExtractSigningTime(signature)
-		if err != nil {
-			log.Fatalln(err)
+			log.Println("SUCCESS: SIGNATURE VERIFICATION")
 		}
 	}
 
-	// Calculate digest of the document
-	content, err := pdf_sign.Contents(os.Args[1], byteRangeArray)
-	if err != nil {
-		log.Println(err)
-		log.Fatalln("ERROR: can't calculate content digest")
-	}
+	log.Println("INFO: sign algorithm: ", mypdf.Signature.GetOnlySigner().SignatureAlgorithm)
 
-	// VALIDATE SIGNATURE
-	// I'm implementing my own verify()function. The ones included in pkcs7 package the expiration
-	// is always done against the SigningTime or the current time, which is wrong for PADES LTV
-	// TODO Review verify() function: do we really need the certificates here?
-	_, err = pdf_sign.VerifyPkcs7(signature, signingTime, content, trustedAnchors)
+	// 3 REVOCATION INFORMATION
 
-	if err != nil {
-		log.Println(err)
-		log.Fatalln("ERROR: signature verification failed")
-	} else {
-		log.Println("success: signature verification")
-	}
-
-	log.Println("sign algorithm: ", signature.GetOnlySigner().SignatureAlgorithm)
-
-	// 3 REVOCATION CHECKS
 	// The RI (revocation information = CRLs, OCSP) of the signature are embedded in the CMS object itself
 	// Adobe Reader: "The selected certificate is considered valid because it has not been revoked
 	// as verified using the Online Certificate Status Protocol (OCSP) response that was embedded in the signature."
 
 	// For PAdES CMS signatures, the RI is embedded in the signature as a signed attribute with OID 1.2.840.113583.1.1.8
-	// TODO Should this function return an array of OCSPResponses? For consistency
-	ocspResponse, crl, err := pdf_sign.ExtractRevocationInfo(signature)
-	if err != nil {
-		log.Println(err)
-		log.Fatalln("ERROR: extract revocation info from pkcs7 failed")
-	} else {
-		log.Println("revocation information is included in the signature")
-	}
 
 	// Validate OCSP included in the signature (i.e. the OCSP for the signing certificate)
-	_, err = pdf_sign.VerifyOcsp(ocspResponse)
-	if err != nil {
-		log.Println(err)
-		log.Fatalln("ERROR: ocsp verification failed (pkcs7)")
+	if !mypdf.IsTimestampOnly {
+
+		_, err := pdf_sign.VerifyRevocationInfo(mypdf.RevocationInfo, mypdf.Signature)
+		if err != nil {
+			log.Println(err)
+			log.Fatalln("ERROR: revocation information verification failed (pkcs7)")
+		}
+		log.Println("SUCCESS: REVOCATION INFORMATION VERIFICATION")
+
 	} else {
-		log.Println("success: ocsp response status is GOOD (pkcs7)")
+		log.Println("INFO: timestamp only (no revocation information in pkcs7 to verify)")
 	}
 
-	// Validate signing certificate against CRL
-	ok, err := pdf_sign.VerifyCrl(crl, signature)
-	if err != nil {
-		log.Println(err)
-		log.Fatalln("ERROR: crl verification failed")
-	}
-	if !ok {
-		log.Fatalln("ERROR: signing certificate expired according with crl")
-	} else {
-		log.Println("success: signing certificate (pkcs7) NOT expired according with crl")
-	}
-
-	// 4 LTV
+	// 4 LTV (Validation Information)
 	// The VI (validation information = CRLs, OCSP) included in the document are the ones of the timestamp
 	// Adobe Reader: "The selected certificate is considered valid because it has not been revoked
 	// as verified using the Online Certificate Status Protocol (OCSP) response that was embedded in the document."
 
-	// Extract OCSPs and CRLs from the PDF
-	ocsps, crls, err := pdf_sign.ExtractValidationInformation(os.Args[1])
-	if err != nil {
-		log.Println(err)
-		log.Fatalln("ERROR: failed to extract validation information from pdf")
-	}
-
-	// Validate OCSP included in the document
-	if len(ocsps) == 0 {
-		log.Println("no ocsp embedded in pdf")
-	}
-	for _, ocspResponse := range ocsps {
-		_, err := pdf_sign.VerifyOcsp(ocspResponse)
-		if err != nil {
-			log.Println(err)
-			log.Fatalln("ERROR: ocsp verification failed (ltv)")
-		} else {
-			log.Println("validation information found in pdf")
-		}
-
-		log.Println("success: ocsp response status is GOOD (ltv)")
-	}
-
-	// Validate CRL included in the document making sure the signing certificate (timestamp) is not revoked
-	if len(crls) == 0 {
-		log.Println("no crls embedded in pdf")
-	}
-
 	// Either OCSP or CRL should be included in the document, otherwise the PDF is non-LTV
-	if len(ocsps) == 0 && len(crls) == 0 {
+	if mypdf.ValidationInfo.Ocsp == nil && mypdf.ValidationInfo.Crl == nil {
 		log.Fatalf("ERROR: no validation information embedded in PDF")
 	}
-
-	for _, crl := range crls {
-		ok, err := pdf_sign.VerifyCrl(crl, timestamp)
-
-		if err != nil {
-			log.Println(err)
-			log.Fatalln("ERROR: crl verification failed")
-		}
-
-		if !ok {
-			log.Fatalf("ERROR: signing certificate (ltv) expired according with crl")
-		} else {
-			log.Println("success: signing certificate (ltv) NOT expired according with crl")
-		}
+	_, err = pdf_sign.VerifyRevocationInfo(mypdf.ValidationInfo, mypdf.Signature)
+	if err != nil {
+		log.Println(err)
+		log.Fatalln("ERROR: validation information verification failed (ltv)")
 	}
+	log.Println("SUCCESS: VALIDATION INFORMATION VERIFICATION (LTV)")
 }

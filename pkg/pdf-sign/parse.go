@@ -3,16 +3,24 @@ package pdf_sign
 import (
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"errors"
 	"log"
 	"os"
-
-	"golang.org/x/crypto/ocsp"
+	"time"
 
 	pdfcpu "github.com/pdfcpu/pdfcpu/pkg/api"
 	pdf "github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
 	"go.mozilla.org/pkcs7"
+	"golang.org/x/crypto/ocsp"
 )
+
+// Struct for unmarshal of signed attribute RevocationInfoArchival
+type revocationInfoArchival struct {
+	CRL          []asn1.RawValue `asn1:"tag:0,optional"`
+	OCSP         []asn1.RawValue `asn1:"tag:1,optional"`
+	OtherRevInfo []asn1.RawValue `asn1:"tag:2,optional"`
+}
 
 // ExtractContext extracts the PDF context from the PDF found on the given path
 func ExtractContext(path string) (*pdf.Context, error) {
@@ -24,93 +32,33 @@ func ExtractContext(path string) (*pdf.Context, error) {
 	return context, nil
 }
 
-// ExtractSignatureFromPath accesses the PDF on the given path and extracts:
-// - The CMS signature (as a pkcs7 object)
-// - The Byte Range (portion of the document included in the signature)
-func ExtractSignatureFromPath(path string) (*pkcs7.PKCS7, pdf.Array, error) {
+// ExtractByteRange accesses the RootDictionary of the PDF and extracts the Byte Range
+// ByteRange: portion of the document included in the signature
+func ExtractByteRange(sigdict *pdf.Dict) (pdf.Array, error) {
 
 	var byteRangeArray pdf.Array
 
-	context, err := ExtractContext(path)
-	if err != nil {
-		return nil, byteRangeArray, err
+	// Access ByteRange to get the bytes which will form the hash
+	byteRange, found := sigdict.Find("ByteRange")
+	if !found {
+		return byteRangeArray, errors.New("byte range not found")
 	}
 
-	return ExtractSignature(context)
+	// byteRange is an array - cast to pdf.Array
+	byteRangeArray = byteRange.(pdf.Array)
+
+	log.Println("parse: bytearray is ", byteRangeArray)
+
+	return byteRangeArray, nil
 }
 
-// ExtractSignature accesses the RootDictionary of the PDF and extracts:
-// - The CMS signature (as a pkcs7 object)
-// - The Byte Range (portion of the document included in the signature)
-func ExtractSignature(context *pdf.Context) (*pkcs7.PKCS7, pdf.Array, error) {
-
-	var byteRangeArray pdf.Array
-
-	// Access Root Dictionary (pdf.Dict)
-	rootdict := context.RootDict
-	log.Println("found root dictionary")
-
-	// Access AcroForm Dictionary (pdf.Object)
-	acroformobj, found := rootdict.Find("AcroForm")
-
-	if !found {
-		return nil, byteRangeArray, errors.New("acroform dictionary not found")
-	}
-	log.Println("acroform dictionary found")
-
-	// Cast acroformobj (which is pdf.Object or an indirect reference) to pdf.Dict, so we can search for "Fields"
-	acroformdict, err := context.DereferenceDict(acroformobj)
-	if err != nil {
-		return nil, byteRangeArray, err
-	}
-
-	// Access Fields (array?)
-	fields, found := acroformdict.Find("Fields")
-
-	if !found {
-		return nil, byteRangeArray, errors.New("fields not found in acroform dictionary")
-	}
-	log.Println("fields found in acroform dictionary")
-
-	// Resolve Fields reference
-	fieldsarray, err := context.DereferenceArray(fields)
-	if err != nil {
-		return nil, byteRangeArray, errors.New("can't dereference fields array")
-	}
-
-	// We need to access the first position of the array fields
-	value := fieldsarray[0]
-
-	// Which aparently is a reference to the ?? dictionary
-	// TODO Confused. Fix comment and error message.
-	indirectreference, ok := value.(pdf.IndirectRef)
-	if !ok {
-		return nil, byteRangeArray, errors.New("can't cast indirect reference")
-	}
-
-	// Dereference indirect reference to access the dictionary
-	// TODO Confused. Fix comment and error message.
-	dict, err := context.DereferenceDict(indirectreference)
-	if err != nil {
-		return nil, byteRangeArray, errors.New("can't dereference dictionary")
-	}
-
-	// Access V
-	v, found := dict.Find("V")
-	if !found {
-		return nil, byteRangeArray, errors.New("v not found")
-	}
-
-	// Resolve V reference to get Signature Dictionary
-	sigdict, err := context.DereferenceDict(v)
-	if err != nil {
-		return nil, byteRangeArray, errors.New("can't dereference Signature dictionary")
-	}
+// ExtractSignatureBytes accesses the RootDictionary of the PDF and extracts the pkcs7 signature object
+func ExtractSignatureBytes(sigdict *pdf.Dict) ([]byte, error) {
 
 	// Access "Contents" on the Signature Dictionary
 	contents, found := sigdict.Find("Contents")
 	if !found {
-		return nil, byteRangeArray, errors.New("contents not found")
+		return nil, errors.New("contents not found")
 	}
 
 	// Read signature bytes
@@ -118,29 +66,79 @@ func ExtractSignature(context *pdf.Context) (*pkcs7.PKCS7, pdf.Array, error) {
 
 	signatureBytes, err := contentsHexLiteral.Bytes()
 	if err != nil {
-		return nil, byteRangeArray, err
+		return nil, err
 	}
 
-	// Parse CMS signature (the pkcs7 function "Parse" requires the whole document as a parameter)
-	p7, err := pkcs7.Parse(signatureBytes)
-	if err != nil {
-		return nil, byteRangeArray, err
-	}
+	log.Println("parse: found pkcs7 signature")
 
-	// Access ByteRange to get the bytes which will form the hash
-	byteRange, found := sigdict.Find("ByteRange")
-	if !found {
-		return nil, byteRangeArray, err
-	}
-
-	// byteRange is an array - cast to pdf.Array
-	byteRangeArray = byteRange.(pdf.Array)
-
-	return p7, byteRangeArray, nil
+	return signatureBytes, nil
 }
 
-// Contents returns the hash of the document, given the byte range
-func Contents(path string, byteRangeArray pdf.Array) ([]byte, error) {
+// ExtractSigDict extracts the signature dictionary from the given pdf context
+func ExtractSigDict(context *pdf.Context) (pdf.Dict, error) {
+
+	// Access Root Dictionary (pdf.Dict)
+	rootdict := context.RootDict
+	log.Println("parse: root dictionary found in pdf")
+
+	// Access AcroForm Dictionary (pdf.Object)
+	acroformobj, found := rootdict.Find("AcroForm")
+
+	if !found {
+		return nil, errors.New("acroform dictionary not found")
+	}
+	log.Println("parse: acroform dictionary found in pdf")
+
+	// Cast acroformobj (which is pdf.Object or an indirect reference) to pdf.Dict, so we can search for "Fields"
+	acroformdict, err := context.DereferenceDict(acroformobj)
+	if err != nil {
+		return nil, err
+	}
+
+	// Access Fields (array?)
+	fields, found := acroformdict.Find("Fields")
+
+	if !found {
+		return nil, errors.New("fields not found in acroform dictionary")
+	}
+
+	// Resolve Fields reference
+	fieldsarray, err := context.DereferenceArray(fields)
+	if err != nil {
+		return nil, errors.New("can't dereference fields array")
+	}
+
+	// We need to access the first position of the array fields
+	value := fieldsarray[0]
+
+	indirectreference, ok := value.(pdf.IndirectRef)
+	if !ok {
+		return nil, errors.New("can't cast indirect reference")
+	}
+
+	// Dereference indirect reference to access the dictionary
+	dict, err := context.DereferenceDict(indirectreference)
+	if err != nil {
+		return nil, errors.New("can't dereference dictionary")
+	}
+
+	// Access V
+	v, found := dict.Find("V")
+	if !found {
+		return nil, errors.New("v not found")
+	}
+
+	// Resolve V reference to get Signature Dictionary
+	sigdict, err := context.DereferenceDict(v)
+	if err != nil {
+		return nil, errors.New("can't dereference Signature dictionary")
+	}
+	log.Println("parse: signature dictionary found in pdf")
+	return sigdict, nil
+}
+
+// ExtractContent returns the hash of the document, given the byte range
+func ExtractContent(path string, byteRangeArray pdf.Array) ([]byte, error) {
 
 	// The byte range indicates the portion of the document to be signed
 
@@ -173,13 +171,154 @@ func Contents(path string, byteRangeArray pdf.Array) ([]byte, error) {
 
 }
 
-// ExtractValidationInformation finds and parses the Validation Information embedded in the PDF document
-func ExtractValidationInformation(path string) ([]*ocsp.Response, []*pkix.CertificateList, error) {
+// ExtractTimestamp extracts the timestamp from a signature
+func ExtractTimestamp(signature *pkcs7.PKCS7) (*pkcs7.PKCS7, error) {
 
-	context, err := pdfcpu.ReadContextFile(path)
-	if err != nil {
-		return nil, nil, err
+	var timestamp *pkcs7.PKCS7
+
+	signers := signature.Signers
+
+	// Only 1 signer allowed
+	if len(signers) != 1 {
+		return timestamp, errors.New("there must be only one signer on the pkcs7")
 	}
+
+	signerInfo := signers[0]
+
+	// The timestamp is included in the "SignerInfo" as an unauthenticated attribute
+	// The timestamp is a CADES signature of the "authenticated attributes"
+	unauthAttrs := signerInfo.UnauthenticatedAttributes
+	for _, unauthAttr := range unauthAttrs {
+
+		// LATER DEBUG info
+		//log.Printf("%d unauthenticated attribute type %s found in timestamp\n", i, unauthAttr.Type)
+
+		// Timestamp should be 1.2.840.113549.1.9.16.2.14 according to RFC3161 (Appendix A)
+		if unauthAttr.Type.String() == "1.2.840.113549.1.9.16.2.14" {
+
+			log.Println("parse: timestamp found in pkcs7")
+
+			// The signingTime must be the one corresponding to the AuthAttribute of the timestamp
+			// The timestamp is a CADES signature
+			timestamp, err := pkcs7.Parse(unauthAttr.Value.Bytes)
+			if err != nil {
+				return timestamp, err
+			}
+			return timestamp, nil
+		}
+	}
+	return timestamp, errors.New("no timestamp found in pkcs7")
+}
+
+// ExtractSigningTime extracts the signingTime from a timestamp
+func ExtractSigningTime(timestamp *pkcs7.PKCS7) (time.Time, error) {
+
+	var signingTime time.Time
+
+	signers := timestamp.Signers
+	if len(signers) != 1 {
+		return signingTime, errors.New("the number of signers must be exactly 1")
+	}
+
+	signer := signers[0]
+
+	// SigningTime is 1.2.840.113549.1.9.5
+	// It should be part of the authenticated attributes for a CAdES signature
+	var OIDAttributeSigningTime = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 5}
+
+	for _, authattr := range signer.AuthenticatedAttributes {
+
+		if authattr.Type.Equal(OIDAttributeSigningTime) {
+			signingTimeBytes := authattr.Value.Bytes
+			asn1.Unmarshal(signingTimeBytes, &signingTime)
+
+			log.Println("parse: signing time is ", signingTime)
+			return signingTime, nil
+		}
+	}
+
+	// No signing time found
+	return signingTime, errors.New("no signing time in pkcs7")
+
+}
+
+// IsTimestampOnly returns true if the signature is a timestamp (instead of a CMS signature)
+func IsTimestampOnly(signature *pkcs7.PKCS7) bool {
+
+	// LATER Find a better way to find out if it's at timestamp or a cms
+
+	// Try to extract the signingTime
+	// If not found: it's a cms signature (PAdES)
+	// If found: it's a timestamp (CAdES)
+
+	_, err := ExtractSigningTime(signature)
+	if err != nil {
+		log.Println("parse: the pkcs7 is a cms signature")
+		return false
+	}
+	log.Println("parse: the pkcs7 is a timestamp")
+	return true
+}
+
+// ExtractRevocationInfo extracts the RevocationInformation from the signature
+func ExtractRevocationInfo(signature *pkcs7.PKCS7) (*ocsp.Response, *pkix.CertificateList, error) {
+
+	var ocspResponse *ocsp.Response
+	var crl *pkix.CertificateList
+
+	signers := signature.Signers
+	for i := 0; i < len(signers); i++ {
+		signerInfo := signers[i]
+
+		// The RI is embedded in the signature as signed attribute with OID 1.2.840.113583.1.1.8
+		authAttrs := signerInfo.AuthenticatedAttributes
+
+		for _, authAttr := range authAttrs {
+
+			// LATER DEBUG
+			// log.Printf("authenticated attribute type %s found in signature\n", authAttr.Type)
+
+			if authAttr.Type.String() == "1.2.840.113583.1.1.8" {
+
+				log.Printf("parse: revocationinfo found in pkcs7")
+
+				// OCSP
+				ocspbytes := authAttr.Value.Bytes
+
+				// ocspbytes is an ASN.1 encoded object, containing CRLs and OCSPs
+				var ri revocationInfoArchival
+				_, err := asn1.Unmarshal(ocspbytes, &ri)
+
+				if err != nil {
+					return ocspResponse, crl, err
+				}
+
+				ocspResponse, err = ocsp.ParseResponse(ri.OCSP[0].Bytes, nil)
+				if err != nil {
+					return ocspResponse, crl, err
+				}
+
+				crl, err := x509.ParseCRL(ri.CRL[0].Bytes)
+				if err != nil {
+					return ocspResponse, crl, err
+				}
+
+				// Either the CRL or the OCSP might be empty, but not both of them
+				if len(ri.OCSP) == 0 && len(ri.CRL) == 0 {
+					return ocspResponse, crl, errors.New("both ocsp array and crl array are empty on revocationInfoArchival attribute")
+				}
+
+				return ocspResponse, crl, nil
+			}
+		}
+		return ocspResponse, crl, errors.New("revocationInfoArchival attribute not found")
+	}
+	return ocspResponse, crl, errors.New("revocationInfoArchival attribute not found")
+}
+
+// ExtractValidationInformation finds and parses the Validation Information embedded in the PDF document
+func ExtractValidationInformation(context *pdf.Context) ([][]byte, [][]byte, error) {
+
 	// Access the Root Dictionary
 	rootdict := context.RootDict
 
@@ -194,7 +333,9 @@ func ExtractValidationInformation(path string) ([]*ocsp.Response, []*pkix.Certif
 	if err != nil {
 		return nil, nil, err
 	}
+	log.Println("parse: dss dictionary found in pdf")
 
+	// TODO Eventually this should not be a fatal error here
 	// Access OCSPs object
 	ocspsobj, found := dssdict.Find("OCSPs")
 	if !found {
@@ -207,7 +348,7 @@ func ExtractValidationInformation(path string) ([]*ocsp.Response, []*pkix.Certif
 		return nil, nil, err
 	}
 
-	ocsps := make([]*ocsp.Response, len(ocspsarray))
+	ocspsbytes := make([][]byte, len(ocspsarray))
 
 	// Iterate through the ocsp list
 	for i, ocsparrayelement := range ocspsarray {
@@ -219,26 +360,13 @@ func ExtractValidationInformation(path string) ([]*ocsp.Response, []*pkix.Certif
 		if err != nil {
 			return nil, nil, err
 		}
-
-		// Each OCSP object is an ASN.1 encoded OCSP response
-
-		// fmt.Println(hex.EncodeToString(ocspstream))
-		// Parse OCSP response
-		ocspresponse, err := ocsp.ParseResponse(ocspbyte, nil)
-		// TODO the ocsp library uses "signatureAlgorithmDetails" which is actually a copy from x509
-		// However, the PSS algorithm is missing for ocsp (it's included for x509 though)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		// Add ocsp to return ocsp array
-		ocsps[i] = ocspresponse
+		ocspsbytes[i] = ocspbyte
 	}
 
 	// Access CRLs object
 	crlsobj, found := dssdict.Find("CRLs")
 	if !found {
-		return nil, nil, errors.New("crl object not found in dss dictionary")
+		return ocspsbytes, nil, errors.New("crl object not found in dss dictionary")
 	}
 
 	crlsarray, err := context.DereferenceArray(crlsobj)
@@ -246,7 +374,7 @@ func ExtractValidationInformation(path string) ([]*ocsp.Response, []*pkix.Certif
 		return nil, nil, err
 	}
 
-	crls := make([]*pkix.CertificateList, len(crlsarray))
+	crlsbytes := make([][]byte, len(crlsarray))
 
 	// Iterate throw the CRLs on the array and access stream dictionary
 	for i, crlarrayelement := range crlsarray {
@@ -259,12 +387,8 @@ func ExtractValidationInformation(path string) ([]*ocsp.Response, []*pkix.Certif
 			return nil, nil, err
 		}
 
-		certList, err := x509.ParseCRL(crlstream)
-		if err != nil {
-			return ocsps, nil, err
-		}
-		// Include CRL in return CRL array
-		crls[i] = certList
+		crlsbytes[i] = crlstream
+
 	}
-	return ocsps, crls, nil
+	return ocspsbytes, crlsbytes, nil
 }
