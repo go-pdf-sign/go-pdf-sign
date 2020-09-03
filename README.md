@@ -1,4 +1,30 @@
-## PDF Signature Verification
+
+
+## Signed PDF Validation
+
+Usage:
+```
+go run cmd/pdfvalidate/main.go mysignedpdf.pdf mytrustedanchors.pem
+```
+
+The second argument is optional. It points to a file containing a sequence of trusted CA certificates in pem format.
+
+The program __verify.go__:
+
+ - parses and extracts the content and signature information from a signed pdf
+ - parses and extracts the timestamp from the pkcs7 signature
+ - parses and extracts the revocation information from the pkcs7 signature
+ - parses and extracts the validation information from the signed pdf
+ - verifies the timestamp and validates it against the validation information
+ - verifies the signature and validates it against the revocation information
+ - it also works with only timestamped documents
+
+Limitations:
+ - it does not work with documents which were signed several times 
+ - it does not work with password-protected documents
+
+
+## PDF Signature 
 
 A PDF is a ascii file which can include some binary content. The information in a PDF is structured as a tree of objects, which can be:
 
@@ -18,23 +44,9 @@ A PDF can be signed i.e. it can contain a (visible or not-visible) electronic si
 
 The PDF Signature binary value is placed into the __Contents__ entry of the signature dictionary
 
-The program __verify.go__:
-
- - parses and extracts the content and signature information from a signed pdf
- - parses and extracts the timestamp from the pkcs7 signature
- - parses and extracts the revocation information from the pkcs7 signature
- - parses and extracts the validation information from the signed pdf
- - verifies the timestamp and validates it against the validation information
- - verifies the signature and validates it against the revocation information
- - it also works with only timestamped documents
-
-Limitations:
- - it does not work with documents which were signed several times 
- - it does not work with password-protected documents
-
 To better understand how this works, let's take a look at the internal structure of a PDF document:
 ```
-vi mydocument.pdf
+vi mysignedpdf.pdf
 ```
 ### xRef Table
 
