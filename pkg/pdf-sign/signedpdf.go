@@ -141,8 +141,11 @@ func Init(filepath string, trustedAnchorsPem string) (SignedPdf, error) {
 		// Include parsed ocsp in ocsp array
 		ocsps[i] = ocspresponse
 	}
+
 	// LATER If I get only the first element, I actually don't need the loop
-	mypdf.ValidationInfo.Ocsp = ocsps[0]
+	if len(ocsps) > 0 {
+		mypdf.ValidationInfo.Ocsp = ocsps[0]
+	}
 
 	// Create array of crls
 	crls := make([]*pkix.CertificateList, len(crlsbytearray))
@@ -156,7 +159,9 @@ func Init(filepath string, trustedAnchorsPem string) (SignedPdf, error) {
 		crls[i] = certList
 	}
 	// LATER If I get only the first element, I actually don't need the loop
-	mypdf.ValidationInfo.Crl = crls[0]
+	if len(crls) > 0 {
+		mypdf.ValidationInfo.Crl = crls[0]
+	}
 
 	// 7. DEFINE TRUSTED ANCHORS
 	// If the trusted anchors are not provided, get the european list
