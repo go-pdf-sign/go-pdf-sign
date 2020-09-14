@@ -10,10 +10,12 @@ import (
 	"golang.org/x/crypto/ocsp"
 )
 
-// The RevocationInfo type contains ocsps and crls
+// The RevocationInfo type contains a base16-encoded signature and its associated ocsps, crls and certs
 type RevocationInfo struct {
-	Crl  *pkix.CertificateList
-	Ocsp *ocsp.Response
+	Base16cert string
+	Crls       []*pkix.CertificateList
+	Ocsps      []*ocsp.Response
+	Certs      []*x509.Certificate
 }
 
 // The SignedPdf type holds all relevant information for signature verification
@@ -37,10 +39,10 @@ type SignedPdf struct {
 	// SigningTime is the signed time signed holded by the timestamp
 	SigningTime time.Time
 
-	// RevocationInfo holds the revocation information associated with the signing certificate
+	// RevocationInfo holds the revocation information embedded in the pkcs7
 	RevocationInfo RevocationInfo
 
-	// ValidationInfo holds the revocation information associated with the timestamp signing certificate
+	// ValidationInfo holds the revocation information associated with all signatures
 	ValidationInfo RevocationInfo
 
 	// TrustedAnchors hold the trusted ca certificates for signature validation
@@ -85,18 +87,23 @@ func Init(filepath string, trustedAnchorsPem string) (SignedPdf, error) {
 	// TIMESTAMP ONLY
 	mypdf.IsTimestampOnly = IsTimestampOnly(mypdf.Signature)
 
+	var timestampBytes []byte
+
 	// EXTRACT PKCS#7 TIMESTAMP
 	if mypdf.IsTimestampOnly {
+
 		// If the document is only timestamped, the signed timestamp is the signature itself
 		mypdf.Timestamp = mypdf.Signature
+		timestampBytes = signatureBytes
 
 	} else {
+
 		// If it is a CMS signature, we extract the timestamp
-		mypdf.Timestamp, err = ExtractTimestamp(mypdf.Signature)
+		timestampBytes, err = ExtractTimestampBytes(mypdf.Signature)
 		if err != nil {
 			return mypdf, err
 		}
-		//log.Printf("timestamp extracted from pkcs7")
+		mypdf.Timestamp, err = pkcs7.Parse(timestampBytes)
 	}
 
 	// EXTRACT SIGNING TIME
@@ -115,52 +122,46 @@ func Init(filepath string, trustedAnchorsPem string) (SignedPdf, error) {
 	}
 
 	// EXTRACT REVOCATION INFO FROM PKCS#7 (only for cms signatures)
-	// TODO this function must return a RevocationInfo object
+
+	// The RI (revocation information = CRLs, OCSP) of the signature are embedded in the CMS object itself
+	// Adobe Reader: "The selected certificate is considered valid because it has not been revoked
+	// as verified using the Online Certificate Status Protocol (OCSP) response that was embedded in the signature."
+	// For PAdES CMS signatures, the RI is embedded in the signature as a signed attribute with OID 1.2.840.113583.1.1.8
+
+	// The RI might not be on the RevocationInfoArchival as assumed below, but it can be embedded in the DSS dictionary directly alongside the VI
+	var found bool
 	if !mypdf.IsTimestampOnly {
-		mypdf.RevocationInfo.Ocsp, mypdf.RevocationInfo.Crl, err = ExtractRevocationInfo(mypdf.Signature)
+		found, mypdf.RevocationInfo, err = ExtractRevocationInfo(mypdf.Signature)
 		if err != nil {
 			return mypdf, err
 		}
+
+		// If there is no revocation info on the pkcs7, try to extract it from the DSS dictionary (below)
+
+		// EXTRACT REVOCATION INFO FROM PDF (signature)
+		// If there was no revocation info on the pkcs7, try to find the ocsp among the validation information (same as for the timestamp)
+		if !found {
+
+			// Find out index by checking how many elements the array has
+			//index := len(mypdf.ValidationInfo)
+			// Extract ValidationInfo for the cms signature
+			mypdf.RevocationInfo, err = ExtractValidationInformation(context, signatureBytes)
+			if err != nil {
+				return mypdf, err
+			}
+		}
 	}
+
+	// EXTRACT VALIDATION INFO FROM PDF (timestamp)
+
 	// For timestamps, there is only validation info embedded in the document, nothing to extract from the pkcs7
+	// The VI (validation information = CRLs, OCSP) included in the document are the ones of the timestamp
+	// Adobe Reader: "The selected certificate is considered valid because it has not been revoked
+	// as verified using the Online Certificate Status Protocol (OCSP) response that was embedded in the document."
 
-	// EXTRACT VALIDATION INFO FROM PDF
-	ocspsbytearray, crlsbytearray, err := ExtractValidationInformation(context)
-
-	// Create array of ocsp responses
-	ocsps := make([]*ocsp.Response, len(ocspsbytearray))
-
-	// Each OCSP object is an ASN.1 encoded OCSP response
-	for i, ocspstream := range ocspsbytearray {
-
-		// Parse OCSP response
-		ocspresponse, err := ocsp.ParseResponse(ocspstream, nil)
-		if err != nil {
-			return mypdf, err
-		}
-		// Include parsed ocsp in ocsp array
-		ocsps[i] = ocspresponse
-	}
-
-	// LATER If I get only the first element, I actually don't need the loop
-	if len(ocsps) > 0 {
-		mypdf.ValidationInfo.Ocsp = ocsps[0]
-	}
-
-	// Create array of crls
-	crls := make([]*pkix.CertificateList, len(crlsbytearray))
-
-	for i, crlstream := range crlsbytearray {
-		certList, err := x509.ParseCRL(crlstream)
-		if err != nil {
-			return mypdf, err
-		}
-		// Include parsed crl in crl array
-		crls[i] = certList
-	}
-	// LATER If I get only the first element, I actually don't need the loop
-	if len(crls) > 0 {
-		mypdf.ValidationInfo.Crl = crls[0]
+	mypdf.ValidationInfo, err = ExtractValidationInformation(context, nil)
+	if err != nil {
+		return mypdf, err
 	}
 
 	// 7. DEFINE TRUSTED ANCHORS

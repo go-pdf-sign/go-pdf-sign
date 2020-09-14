@@ -1,12 +1,15 @@
 package pdf_sign
 
 import (
+	"crypto/sha1"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/hex"
 	"errors"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	pdfcpu "github.com/pdfcpu/pdfcpu/pkg/api"
@@ -70,6 +73,9 @@ func ExtractSignatureBytes(sigdict *pdf.Dict) ([]byte, error) {
 	}
 
 	log.Println("parse: found pkcs7 signature")
+
+	//sigbytesstring := hex.EncodeToString(signatureBytes)
+	//fmt.Println(" ****** Signature bytes string: ", sigbytesstring)
 
 	return signatureBytes, nil
 }
@@ -171,16 +177,14 @@ func ExtractContent(path string, byteRangeArray pdf.Array) ([]byte, error) {
 
 }
 
-// ExtractTimestamp extracts the timestamp from a signature
-func ExtractTimestamp(signature *pkcs7.PKCS7) (*pkcs7.PKCS7, error) {
-
-	var timestamp *pkcs7.PKCS7
+// ExtractTimestampBytes accesses the pkcs7 signature object and returns the bytes of the timestamp
+func ExtractTimestampBytes(signature *pkcs7.PKCS7) ([]byte, error) {
 
 	signers := signature.Signers
 
 	// Only 1 signer allowed
 	if len(signers) != 1 {
-		return timestamp, errors.New("there must be only one signer on the pkcs7")
+		return nil, errors.New("there must be only one signer on the pkcs7")
 	}
 
 	signerInfo := signers[0]
@@ -198,16 +202,12 @@ func ExtractTimestamp(signature *pkcs7.PKCS7) (*pkcs7.PKCS7, error) {
 
 			log.Println("parse: timestamp found in pkcs7")
 
-			// The signingTime must be the one corresponding to the AuthAttribute of the timestamp
-			// The timestamp is a CADES signature
-			timestamp, err := pkcs7.Parse(unauthAttr.Value.Bytes)
-			if err != nil {
-				return timestamp, err
-			}
-			return timestamp, nil
+			timestampBytes := unauthAttr.Value.Bytes
+
+			return timestampBytes, nil
 		}
 	}
-	return timestamp, errors.New("no timestamp found in pkcs7")
+	return nil, errors.New("no timestamp found in pkcs7")
 }
 
 // ExtractSigningTime extracts the signingTime from a timestamp
@@ -260,11 +260,10 @@ func IsTimestampOnly(signature *pkcs7.PKCS7) bool {
 	return true
 }
 
-// ExtractRevocationInfo extracts the RevocationInformation from the signature
-func ExtractRevocationInfo(signature *pkcs7.PKCS7) (*ocsp.Response, *pkix.CertificateList, error) {
+// ExtractRevocationInfo extracts the RevocationInformation from the signature. It returns false if none was found.
+func ExtractRevocationInfo(signature *pkcs7.PKCS7) (bool, RevocationInfo, error) {
 
-	var ocspResponse *ocsp.Response
-	var crl *pkix.CertificateList
+	var revocationInfo RevocationInfo
 
 	signers := signature.Signers
 	for i := 0; i < len(signers); i++ {
@@ -290,38 +289,41 @@ func ExtractRevocationInfo(signature *pkcs7.PKCS7) (*ocsp.Response, *pkix.Certif
 				_, err := asn1.Unmarshal(ocspbytes, &ri)
 
 				if err != nil {
-					return ocspResponse, crl, err
+					return false, revocationInfo, err
 				}
 
+				revocationInfo.Ocsps = make([]*ocsp.Response, len(ri.OCSP))
 				if len(ri.OCSP) > 0 {
-					ocspResponse, err = ocsp.ParseResponse(ri.OCSP[0].Bytes, nil)
+					ocspResponse, err := ocsp.ParseResponse(ri.OCSP[0].Bytes, nil)
 					if err != nil {
-						return ocspResponse, crl, err
+						return false, revocationInfo, err
 					}
+					revocationInfo.Ocsps[0] = ocspResponse
 				}
 
+				revocationInfo.Crls = make([]*pkix.CertificateList, len(ri.CRL))
 				if len(ri.CRL) > 0 {
 					crl, err := x509.ParseCRL(ri.CRL[0].Bytes)
 					if err != nil {
-						return ocspResponse, crl, err
+						return false, revocationInfo, err
 					}
+					revocationInfo.Crls[0] = crl
 				}
 
 				// Either the CRL or the OCSP might be empty, but not both of them
 				if len(ri.OCSP) == 0 && len(ri.CRL) == 0 {
-					return ocspResponse, crl, errors.New("both ocsp array and crl array are empty on revocationInfoArchival attribute")
+					return false, revocationInfo, errors.New("both ocsp array and crl array are empty on revocationInfoArchival attribute")
 				}
-
-				return ocspResponse, crl, nil
+				return true, revocationInfo, nil
 			}
 		}
-		return ocspResponse, crl, errors.New("revocationInfoArchival attribute not found")
+		log.Println("parse: no revocationInfoArchival on pkcs7")
 	}
-	return ocspResponse, crl, errors.New("revocationInfoArchival attribute not found")
+	return false, revocationInfo, nil
 }
 
-// ExtractValidationInformation finds and parses the Validation Information embedded in the PDF document
-func ExtractValidationInformation(context *pdf.Context) ([][]byte, [][]byte, error) {
+// ExtractDss extracts the dss dictionary from the pdf context
+func ExtractDss(context *pdf.Context) (pdf.Dict, error) {
 
 	// Access the Root Dictionary
 	rootdict := context.RootDict
@@ -329,70 +331,239 @@ func ExtractValidationInformation(context *pdf.Context) ([][]byte, [][]byte, err
 	// Find DSS Dictionary inside Root Dictionary
 	dssdictref, found := rootdict.Find("DSS")
 	if !found {
-		return nil, nil, errors.New("dss dictionary not found")
+		return nil, errors.New("dss dictionary not found")
 	}
 
 	// DSS object is an indirect object pointing to the DSS dictionary
 	dssdict, err := context.DereferenceDict(dssdictref)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	log.Println("parse: dss dictionary found in pdf")
+	//log.Println("parse: dss dictionary found in pdf")
 
-	// TODO Eventually this should not be a fatal error here
-	// Access OCSPs object
-	ocspsobj, found := dssdict.Find("OCSPs")
-	if !found {
-		return nil, nil, errors.New("ocsp object not found in dss dictionary")
-	}
+	return dssdict, nil
+}
 
-	// OCSPs object is an indirect object pointing to an array
-	ocspsarray, err := context.DereferenceArray(ocspsobj)
+// ExtractVri extracts the vri dictionary from the pdf context
+func ExtractVri(context *pdf.Context) (pdf.Dict, error) {
+
+	dssdict, err := ExtractDss(context)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
+	}
+	//log.Println("parse: vri dictionary found in dss")
+
+	// Find VRI dictionary
+	vridictref, found := dssdict.Find("VRI")
+	if !found {
+		return nil, errors.New("vri dictionary not found")
 	}
 
-	ocspsbytes := make([][]byte, len(ocspsarray))
+	// VRI object is an indirect object pointing to the VRI dictionary
+	vridict, err := context.DereferenceDict(vridictref)
+	if err != nil {
+		return nil, err
+	}
 
-	// Iterate through the ocsp list
-	for i, ocsparrayelement := range ocspsarray {
+	return vridict, nil
+}
 
-		// Each element on the array is an indirect object pointing to the OCSP stream dictionary
-		arrayElement := ocsparrayelement.(pdf.IndirectRef)
+// ExtractValidationInformation finds and parses the Validation Information embedded in the PDF document
+// If sigbytes is nil (no reference to an existing signature), it gets the ocsp and crl directly from the dss dictionary
+// I'm assuming here the ocsps and crls element nested directly under dss are the ones related to the timestamp
+func ExtractValidationInformation(context *pdf.Context, sigbytes []byte) (RevocationInfo, error) {
 
-		ocspbyte, err := pdf.ExtractStreamData(context, arrayElement.ObjectNumber.Value())
+	var validationInfo RevocationInfo
+	var dict pdf.Dict
+	var err error
+
+	// Key for ocsp/crl is different for the dss and vri dictionaries
+	var ocspkey string
+	var crlkey string
+	var certkey string
+
+	if sigbytes == nil {
+
+		log.Println("parse: retrieving validation info for timestamp")
+
+		// Extract dss dictionary (no signature provided)
+		dict, err = ExtractDss(context)
 		if err != nil {
-			return nil, nil, err
+			return validationInfo, err
 		}
-		ocspsbytes[i] = ocspbyte
+
+		log.Println("parse: dss dictionary found in pdf")
+
+		certkey = "Certs"
+		ocspkey = "OCSPs"
+		crlkey = "CRLs"
+
+	} else {
+
+		// The index of the vri dictionary entry is the base-16-encoded (uppercase) SHA1 digest of the signature to which it applies
+		hash := sha1.New()
+		hash.Write(sigbytes)
+		// hashBytes is encoded in base16
+		hashBytes := hash.Sum(nil)
+		base16str := strings.ToUpper(hex.EncodeToString(hashBytes))
+
+		validationInfo.Base16cert = base16str
+
+		log.Println("parse: retrieving revocation info for signature: ", base16str)
+
+		// Extract vri dictionary associated to the provided signature bytes
+		vridict, err := ExtractVri(context)
+		if err != nil {
+			return validationInfo, err
+		}
+
+		// The value is the Signature VRI dictionary which contains the validation-related information for that signature
+		vrientry, err := vridict.Entry("VRI", base16str, true)
+		if err != nil {
+			return validationInfo, err
+		}
+
+		dict, err = context.DereferenceDict(vrientry)
+		if err != nil {
+			return validationInfo, err
+		}
+
+		log.Println("parse: vri dictionary found in pdf")
+
+		certkey = "Cert"
+		ocspkey = "OCSP"
+		crlkey = "CRL"
+	}
+
+	// Find Certs object
+	certsobj, found := dict.Find(certkey)
+	if found {
+
+		// Certs object is an indirect object pointing to an array
+		certsarray, err := context.DereferenceArray(certsobj)
+		if err != nil {
+			return validationInfo, err
+		}
+
+		certsbytes := make([][]byte, len(certsarray))
+		for i, certsarrayelement := range certsarray {
+
+			arrayElement := certsarrayelement.(pdf.IndirectRef)
+
+			certbyte, err := pdf.ExtractStreamData(context, arrayElement.ObjectNumber.Value())
+			if err != nil {
+				return validationInfo, err
+			}
+			certsbytes[i] = certbyte
+		}
+
+		// Create array of certificates
+		certs := make([]*x509.Certificate, len(certsbytes))
+
+		// Each certificate object is an ASN.1 encoded x509 certificate
+		for i, certstream := range certsbytes {
+
+			// Parse certificate
+			// cert, err := ocsp.ParseResponse(certstream, nil)
+			cert, err := x509.ParseCertificate(certstream)
+			if err != nil {
+				return validationInfo, err
+			}
+			// Include parsed ocsp in ocsp array
+			certs[i] = cert
+		}
+		validationInfo.Certs = certs
+
+	} else {
+		log.Println("parse: there is no cert(s) object on dss/vri dictionary")
+	}
+
+	// Access OCSPs object
+	ocspsobj, found := dict.Find(ocspkey)
+	if found {
+
+		// OCSPs object is an indirect object pointing to an array
+		ocspsarray, err := context.DereferenceArray(ocspsobj)
+		if err != nil {
+			return validationInfo, err
+		}
+
+		ocspsbytes := make([][]byte, len(ocspsarray))
+
+		// Iterate through the ocsp list
+		for i, ocsparrayelement := range ocspsarray {
+
+			// Each element on the array is an indirect object pointing to the OCSP stream dictionary
+			arrayElement := ocsparrayelement.(pdf.IndirectRef)
+
+			ocspbyte, err := pdf.ExtractStreamData(context, arrayElement.ObjectNumber.Value())
+			if err != nil {
+				return validationInfo, err
+			}
+			ocspsbytes[i] = ocspbyte
+		}
+
+		// Create array of ocsp responses
+		ocsps := make([]*ocsp.Response, len(ocspsbytes))
+
+		// Each OCSP object is an ASN.1 encoded OCSP response
+		for i, ocspstream := range ocspsbytes {
+
+			// Parse OCSP response
+			ocspresponse, err := ocsp.ParseResponse(ocspstream, nil)
+			if err != nil {
+				return validationInfo, err
+			}
+			// Include parsed ocsp in ocsp array
+			ocsps[i] = ocspresponse
+		}
+		validationInfo.Ocsps = ocsps
+		//fmt.Println("LEN OF OCSPS (parse) is ", len(ocsps))
+
+	} else {
+		log.Println("parse: there is no ocsp(s) object on dss/vri dictionary")
 	}
 
 	// Access CRLs object
-	crlsobj, found := dssdict.Find("CRLs")
-	if !found {
-		return ocspsbytes, nil, errors.New("crl object not found in dss dictionary")
-	}
+	crlsobj, found := dict.Find(crlkey)
+	if found {
 
-	crlsarray, err := context.DereferenceArray(crlsobj)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	crlsbytes := make([][]byte, len(crlsarray))
-
-	// Iterate throw the CRLs on the array and access stream dictionary
-	for i, crlarrayelement := range crlsarray {
-
-		// The element on the array is an indirect object pointing to the CRL stream dictionary
-		arrayElement := crlarrayelement.(pdf.IndirectRef)
-
-		crlstream, err := pdf.ExtractStreamData(context, arrayElement.ObjectNumber.Value())
+		crlsarray, err := context.DereferenceArray(crlsobj)
 		if err != nil {
-			return nil, nil, err
+			return validationInfo, err
+		}
+		crlsbytes := make([][]byte, len(crlsarray))
+
+		// Iterate throw the CRLs on the array and access stream dictionary
+		for i, crlarrayelement := range crlsarray {
+
+			// The element on the array is an indirect object pointing to the CRL stream dictionary
+			arrayElement := crlarrayelement.(pdf.IndirectRef)
+
+			crlstream, err := pdf.ExtractStreamData(context, arrayElement.ObjectNumber.Value())
+			if err != nil {
+				return validationInfo, err
+			}
+			crlsbytes[i] = crlstream
+
 		}
 
-		crlsbytes[i] = crlstream
+		// Create array of crls
+		crls := make([]*pkix.CertificateList, len(crlsbytes))
 
+		for i, crlstream := range crlsbytes {
+			certList, err := x509.ParseCRL(crlstream)
+			if err != nil {
+				return validationInfo, err
+			}
+			// Include parsed crl in crl array
+			crls[i] = certList
+		}
+
+		validationInfo.Crls = crls
+
+	} else {
+		log.Println("parse: there is no crl(s) object on dss/vri dictionary")
 	}
-	return ocspsbytes, crlsbytes, nil
+	return validationInfo, nil
 }

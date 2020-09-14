@@ -18,7 +18,7 @@ import (
 
 // VerifyPkcs7 is an own implementation based on pkcs7.verifyWithChain.
 // This version allows to do the expiration checks against the timestamp (instead of against the current time or the signing time)
-func VerifyPkcs7(p7 *pkcs7.PKCS7, signingTime time.Time, content []byte, trustedAnchors *x509.CertPool) (bool, error) {
+func VerifyPkcs7(p7 *pkcs7.PKCS7, signingTime time.Time, content []byte, validationInfo RevocationInfo, trustedAnchors *x509.CertPool) (bool, error) {
 
 	signers := p7.Signers
 
@@ -93,7 +93,7 @@ func VerifyPkcs7(p7 *pkcs7.PKCS7, signingTime time.Time, content []byte, trusted
 	log.Println("verify: the signing certificate was valid as for the timestamped signing time")
 
 	// Get intermediates from the signature. Only the roots are passed as a parameter.
-	intermediates, err := getIntermediates(p7)
+	intermediates, err := getIntermediates(p7, validationInfo)
 	if err != nil {
 		return false, nil
 	}
@@ -124,29 +124,46 @@ func VerifyPkcs7(p7 *pkcs7.PKCS7, signingTime time.Time, content []byte, trusted
 // - that the signing certificate is not revoked according to the crl
 func VerifyRevocationInfo(revocationInfo RevocationInfo, signature *pkcs7.PKCS7) (bool, error) {
 
-	if revocationInfo.Ocsp == nil {
-		log.Println("verify: no ocsp embedded in pkcs7")
+	foundOcsp := len(revocationInfo.Ocsps) > 0
+	if foundOcsp {
 
-	} else {
+		// LATER Is this correct? Is it possible to have more than one ocsp response here?
+		// Take first ocsp from the array
+		ocsp := revocationInfo.Ocsps[0]
+		//fmt.Println("LEN OF OCSPS (VerifyRevocationInfo) is ", len(revocationInfo.Ocsps))
 
-		err := VerifyOcsp(revocationInfo.Ocsp)
+		// Validate ocsp response
+		err := VerifyOcsp(ocsp)
 		if err != nil {
 			return false, err
 		}
+
+	} else {
+		log.Println("there is no ocsp to validate")
 	}
 
-	// Validate signing certificate against CRL included in the signature (i.e. the CRL for the signing certificate)
-	if revocationInfo.Crl == nil {
-		log.Println("verify: no crl embedded in pkcs7")
+	// LATER Is this correct? Is it possible to have more than one crl here?
+	foundCrl := len(revocationInfo.Ocsps) > 0
+	if foundCrl {
+		// Take first crl from the array
+		crl := revocationInfo.Crls[0]
 
-	} else {
-		err := VerifyCrl(revocationInfo.Crl, signature)
+		// Validate signing certificate against CRL
+		err := VerifyCrl(crl, signature)
 		if err != nil {
 			return false, err
 		}
 
+	} else {
+		log.Println("there is no crl to validate against")
+	}
+
+	// Return true if either ocsp or crl was found, false otherweise
+	if !foundCrl && !foundOcsp {
+		return false, nil
 	}
 	return true, nil
+
 }
 
 // VerifyOcsp validates an OCSP response
@@ -183,14 +200,15 @@ func VerifyCrl(crl *pkix.CertificateList, signature *pkcs7.PKCS7) error {
 
 	} else {
 		for _, revoked := range revokedlist {
-			log.Println("serial number of revoked certificate: ", revoked.SerialNumber)
+			// log.Println("serial number of revoked certificate: ", revoked.SerialNumber)
 			if serialNumber != nil {
 				// Proof that the given serial number does not match the one on the list
 				if serialNumber == revoked.SerialNumber {
 					return errors.New("signing certificate is revoked according with the CRL")
-				} else {
-					log.Println("verify: serial number of revoked certificate does not match the signer certificate")
 				}
+				//else {
+				//	log.Println("verify: serial number of revoked certificate does not match the signer certificate")
+				//}
 			}
 		}
 		log.Println("verify: signing certificate NOT expired according with crl")
@@ -249,15 +267,28 @@ func getCertificate(certpath string) (*x509.Certificate, error) {
 }
 
 // getIntermediates returns a certpool given a pkcs7 signature
-func getIntermediates(p7 *pkcs7.PKCS7) (*x509.CertPool, error) {
+func getIntermediates(p7 *pkcs7.PKCS7, validationInfo RevocationInfo) (*x509.CertPool, error) {
 
 	intermediates := x509.NewCertPool()
 
-	// Add all certificates
+	// Add all certificates from pkcs7
 	for _, cert := range p7.Certificates {
 		intermediates.AddCert(cert)
 		// log.Println(" ***** Added intermediate ", cert.Subject)
 	}
+
+	// Add all certificates from validationInfo (if any)
+	if len(validationInfo.Certs) > 0 {
+		log.Println("verify: adding vri certificates for pkcs7 verification")
+	}
+	//else {
+	//	log.Println("verify: no certificates in vri object")
+	//}
+	for _, cert := range validationInfo.Certs {
+		intermediates.AddCert(cert)
+		//log.Println(" ***** Added intermediate from VRI ", cert.Subject)
+	}
+
 	return intermediates, nil
 }
 
