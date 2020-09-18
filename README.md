@@ -226,6 +226,7 @@ Object 24 is the ValidationRelatedInformation (VRI) and references object 23:
 <</BF6636B968029A848497A37600BF53348E36A016 23 0 R>>
 endobj
 ```
+The index of the vri dictionary entry is the base-16-encoded (uppercase) SHA1 digest of the signature to which it applies
 
 Object 23 contains references to the objects 21 and 22:
 ```
