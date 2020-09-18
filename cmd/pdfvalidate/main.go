@@ -85,6 +85,9 @@ func main() {
 			log.Fatalln("ERROR: revocation information verification failed (pkcs7)")
 		}
 		log.Println("SUCCESS: REVOCATION INFORMATION VERIFICATION")
+		if len(mypdf.RevocationInfo.Ocsps) > 0 {
+			log.Println("info: the OCSP response was signed by ", mypdf.RevocationInfo.Ocsps[0].Certificate.Subject)
+		}
 
 	} else {
 		log.Println("INFO: timestamp only (no revocation information in pkcs7 to verify)")
@@ -102,4 +105,7 @@ func main() {
 		log.Fatalln("ERROR: validation information verification failed (ltv)")
 	}
 	log.Println("SUCCESS: VALIDATION INFORMATION VERIFICATION (LTV)")
+	if len(mypdf.RevocationInfo.Ocsps) > 0 {
+		log.Println("info: the OCSP response was signed by ", mypdf.ValidationInfo.Ocsps[0].Certificate.Subject)
+	}
 }
