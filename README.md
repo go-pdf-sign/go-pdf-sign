@@ -29,6 +29,6 @@ Limitations:
 
 Further reading:
 
-https://github.com/go-pdf-sign/go-pdf-sign
+https://github.com/go-pdf-sign/go-pdf-sign/wiki/PDF-Validation
 
 https://github.com/go-pdf-sign/go-pdf-sign/wiki/Parsing-a-signed-PDF
